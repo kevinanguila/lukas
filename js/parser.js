@@ -15,7 +15,7 @@ const ACCOUNT_ALIASES = {
 // Monto: "25 lucas", "25 mil", "25k", "25.000", "1,5 millones", "un palo", "1630 usd", "$25.000"
 function findAmount(text) {
   const t = norm(text);
-  const re = /(\$|us\$)?\s*(\d+(?:[.,]\d+)*)\s*(k|mil|lucas?|lukas?|barras?|millon(?:es)?|palos?|m\b|usd|dolares|dolar|us)?/g;
+  const re = /(\$|us\$)?\s*(\d+(?:[.,]\d+)*)\s*(millon(?:es)?|k|mil|lucas?|lukas?|barras?|palos?|m\b|usd|dolares|dolar|us)?/g;
   let best = null;
   let m;
   while ((m = re.exec(t))) {

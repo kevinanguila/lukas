@@ -1,6 +1,6 @@
 // Service worker: Lukas funciona sin internet.
 // Sube VERSION cada vez que se publique un cambio para que el iPhone baje la nueva versión.
-const VERSION = 'lukas-v1.0.1';
+const VERSION = 'lukas-v1.0.2';
 const FILES = [
   './',
   './index.html',

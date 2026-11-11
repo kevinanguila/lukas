@@ -14,6 +14,8 @@ export function load() {
     state = raw ? migrate(JSON.parse(raw)) : seedState();
   } catch (e) {
     console.error(e);
+    // Guarda los datos dañados aparte para poder recuperarlos, en vez de perderlos
+    try { localStorage.setItem(`lukas.danado.${Date.now()}`, localStorage.getItem(KEY)); } catch {}
     state = seedState();
   }
   return state;

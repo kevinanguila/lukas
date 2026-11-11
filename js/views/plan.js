@@ -184,6 +184,8 @@ export function allocSheet(pid, dir = 1) {
     const v = inputToNumber($('#v', s.el).value);
     if (!v) return;
     const other = $('#other', s.el)?.value || null;
+    const available = dir > 0 ? (other ? st.pocketBalance(other) : st.freeInAccount(x.account)) : inPocket;
+    if (v > available) { toast(`${phrase('warn')} Solo hay ${fmt(Math.max(0, available))} ${dir > 0 ? (other ? 'en ese bolsillo' : 'libres') : 'en el bolsillo'}.`); return; }
     const savings = !!(x.main || x.target);
     if (dir > 0) st.addTx({ type: 'alloc', pocket: pid, fromPocket: other, amount: v, savings: savings && !other });
     else if (other) st.addTx({ type: 'alloc', pocket: other, fromPocket: pid, amount: v });
