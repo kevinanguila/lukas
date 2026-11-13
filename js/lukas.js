@@ -78,8 +78,9 @@ export function adviceList() {
   }
 
   const plan = S.plans[p.key];
-  if (st.paydayDone(p) && plan && !plan.steps?.giro && plan.giroNequi > 0) {
-    add({ id: 'giro', level: 'action', prio: 95, title: 'Falta el giro a Nequi.', text: `Pásale ${fmt(plan.giroNequi)} de NU a Nequi por Bre-B: compromisos más tu Disponible. Cuando lo hagas, márcalo.`, action: { label: 'Ya lo hice / ver', go: 'giro' } });
+  const pendTr = plan?.transfers ? plan.transfers.filter((t) => !t.done) : plan && !plan.steps?.giro && plan.giroNequi > 0 ? [{ from: 'nu', to: 'nequi', amount: plan.giroNequi }] : [];
+  if (st.paydayDone(p) && pendTr.length) {
+    add({ id: 'giro', level: 'action', prio: 95, title: pendTr.length > 1 ? `Faltan ${pendTr.length} transferencias.` : 'Falta una transferencia.', text: pendTr.map((t) => `${st.account(t.from)?.name} → ${st.account(t.to)?.name}: ${fmt(t.amount)}`).join(' · ') + '. Cuando las hagas, márcalas.', action: { label: 'Ver reparto', go: 'giro' } });
   }
 
   // 2. Compromisos vencidos o por vencer
@@ -100,15 +101,16 @@ export function adviceList() {
   }
 
   // 4. Topes de gastos variables
-  const spent = st.spentByCategory(p);
-  for (const c of S.categories.filter((c) => c.block === 'gastos' && c.cap)) {
-    const s = spent[c.id] || 0;
+  const spentI = st.spentByItem(p);
+  const capped = st.allItems().filter(({ cat, item }) => cat.block === 'gastos' && item.cap);
+  for (const { cat, item: c } of capped) {
+    const s = spentI[`${cat.id}/${c.id}`] || 0;
     if (s > c.cap) add({ id: `cap_${c.id}`, level: 'warn', prio: 75, title: phrase('warn'), text: `${c.emoji} ${c.name}: llevas ${fmtShort(s)} y el tope era ${fmtShort(c.cap)}. Te pasaste ${fmtShort(s - c.cap)}.` });
     else if (s > c.cap * 0.8 && frac < 0.6) add({ id: `cap_${c.id}`, level: 'info', prio: 60, title: 'Ojo con ese tope.', text: `${c.emoji} ${c.name} ya va en ${Math.round((s / c.cap) * 100)} % y falta más de la mitad del mes.` });
   }
 
   // 5. Gastos hormiga
-  const small = st.txInPeriod(p).filter((t) => t.type === 'expense' && ['domicilios', 'antojos', 'comida'].includes(t.category) && t.amount < 30000);
+  const small = st.txInPeriod(p).filter((t) => t.type === 'expense' && t.category === 'comida' && t.amount < 30000);
   if (small.length >= 6) {
     const tot = small.reduce((s, t) => s + t.amount, 0);
     add({ id: 'hormiga', level: 'warn', prio: 65, title: phrase('scold'), text: `Van ${small.length} gasticos pequeños (domicilios, antojos, comida) que suman ${fmt(tot)}. Uno a uno no se siente, pero juntos sí, mi llave.` });
@@ -129,7 +131,7 @@ export function adviceList() {
 
   // 7. Plata libre en NU sin asignar
   const nuFree = st.freeInAccount('nu');
-  const capsLeft = S.categories.filter((c) => c.block === 'gastos' && c.cap && (c.account || 'nu') === 'nu').reduce((s, c) => s + Math.max(0, c.cap - (spent[c.id] || 0)), 0);
+  const capsLeft = capped.filter(({ item: c }) => (c.account || 'nu') === 'nu').reduce((s, { cat, item: c }) => s + Math.max(0, c.cap - (spentI[`${cat.id}/${c.id}`] || 0)), 0);
   if (st.paydayDone(p) && nuFree - capsLeft > 200000) {
     add({ id: 'nu_free', level: 'info', prio: 45, title: `${phrase('advice')} tienes plata suelta en NU.`, text: `Hay ${fmt(nuFree - capsLeft)} en NU que no está en ningún bolsillo ni la necesitas para los topes. Mándala a ${main ? main.name : 'una meta'} o a una cajita para que rinda.`, action: { label: 'Mover a bolsillo', go: 'pockets' } });
   }
@@ -192,15 +194,16 @@ export function reactTo(tx) {
     const item = st.checklist(p).find((c) => c.id === tx.recurring);
     return item?.done ? `${phrase('paid')} ${item.name} quedó listo.` : `${phrase('logged')} Abonaste a ${item?.name}: van ${fmtShort(item?.paid)} de ${fmtShort(item?.amount)}.`;
   }
-  const c = st.category(tx.category);
-  if (c?.block === 'disp') {
+  const g = st.category(tx.category);
+  const c = st.item(tx.category, tx.item);
+  if (g?.block === 'disp') {
     const d = disponibleInfo(p);
     if (d.remaining < 0) return `${phrase('scold')} Ya te pasaste ${fmtShort(-d.remaining)} del Disponible.`;
     if (d.used > d.frac + 0.15) return `${phrase('warn')} Te quedan ${fmtShort(d.remaining)} del Disponible: ${fmtShort(d.perDay)} por día.`;
     return `${phrase('logged')} Te quedan ${fmtShort(d.remaining)} del Disponible (${fmtShort(d.perDay)}/día).`;
   }
-  if (c?.block === 'gastos' && c.cap) {
-    const s = st.spentByCategory(p)[c.id] || 0;
+  if (g?.block === 'gastos' && c?.cap) {
+    const s = st.spentByItem(p)[`${g.id}/${c.id}`] || 0;
     if (s > c.cap) return `${phrase('warn')} ${c.name} ya pasó el tope: ${fmtShort(s)} de ${fmtShort(c.cap)}.`;
     return `${phrase('logged')} ${c.name}: ${fmtShort(s)} de ${fmtShort(c.cap)}.`;
   }
@@ -238,4 +241,49 @@ export function goalText() {
   return `${main.emoji} ${main.name}: ${fmt(g.saved)} de ${fmt(g.target)} (${Math.round(g.progress * 100)} %). ${g.missing ? `Faltan ${fmt(g.missing)}${g.pays ? `: ${fmt(g.perPay)} por pago en los próximos ${g.pays}` : ''}.` : phrase('good')}`;
 }
 
-export const helpText = () => `${greeting()} Cuéntame como le hablarías a un amigo:\n\n• «Gasté 25 lucas en almuerzo»\n• «Tanqueé 80 mil con NU»\n• «Pagué el internet»\n• «Le pasé 500 mil de NU a Nequi»\n• «¿Cuánto me queda?» · «Tírala, ¿qué hago?» · «¿Qué me falta pagar?»`;
+export const helpText = () => `${greeting()} Háblame como a un amigo, sin fórmulas:\n\n💸 «Almuerzo 20 lucas» · «tanqueé 80 mil con NU»\n🧾 «Almuerzo 20 y taxi 12» (varios de una)\n✅ «Pagué el internet» (sin monto, ya lo sé)\n🔁 «Pasé 500 mil de NU a Nequi»\n💰 «Me pagaron 1630 usd»\n❓ «¿Cuánto me queda?» · «¿Me alcanza pa' 100 lucas?» · «¿En qué gasté más?» · «¿Cuánto llevo en gasolina?» · «Estoy pelado» · «Tírala, ¿qué hago?»\n↩️ «Borra el último» si me equivoqué.`;
+
+// ---------- Más respuestas del chat ----------
+export function brokeText() {
+  const p = st.currentPeriod();
+  const d = disponibleInfo(p);
+  const nuFree = st.freeInAccount('nu');
+  if (d.remaining > 0) return `Ey, tranquilo mi llave, que pelado pelado no estás. Te quedan ${fmt(d.remaining)} del Disponible: ${fmt(d.perDay)} por día hasta el ${fmtDate(p.end)}. Lo que sí: aguanta los antojos unos días y llegas sobrado.`;
+  return `Ajá, te la tiro plena: el Disponible ya se acabó (te pasaste ${fmt(-d.remaining)}). En NU hay ${fmt(Math.max(0, nuFree))} libres, pero eso es pa' gasolina, mercado e imprevistos. Aguanta hasta el ${fmtDate(p.nextPay)} que cae el pago. Moral de perro, que ya casi.`;
+}
+
+export function affordText(amount) {
+  const p = st.currentPeriod();
+  const d = disponibleInfo(p);
+  if (!amount) return `Dime cuánto, mi llave. Por ahora te quedan ${fmt(Math.max(0, d.remaining))} del Disponible (${fmt(d.perDay)} por día).`;
+  if (amount <= d.remaining - d.perDay * Math.max(0, d.daysLeft - 1) * 0.5) return `${phrase('good')} Sí te alcanza: después de gastar ${fmt(amount)} te quedan ${fmt(d.remaining - amount)} del Disponible pa' ${d.daysLeft} días.`;
+  if (amount <= d.remaining) return `Te alcanza, pero justico: quedarías con ${fmt(d.remaining - amount)} pa' ${d.daysLeft} días (${fmt((d.remaining - amount) / Math.max(1, d.daysLeft))} por día). Si vas, que valga la pena.`;
+  return `${phrase('warn')} No te alcanza del Disponible: te quedan ${fmt(Math.max(0, d.remaining))} y eso cuesta ${fmt(amount)}. Si lo haces, sale de otro bolsillo. ¿Seguro, rey?`;
+}
+
+export function topText() {
+  const p = st.currentPeriod();
+  const groups = st.groupSummary(p).filter((g) => g.spent > 0).sort((a, b) => b.spent - a.spent).slice(0, 5);
+  if (!groups.length) return 'Todavía no has gastado nada este mes, mi llave.';
+  const total = groups.reduce((s, g) => s + g.spent, 0);
+  return `Este mes la plata se te ha ido en:\n\n${groups.map((g, i) => `${i + 1}. ${g.emoji} ${g.name}: ${fmt(g.spent)}`).join('\n')}\n\n${groups[0].block === 'disp' ? `Ojo que lo primero es ${groups[0].name.toLowerCase()}, que es gusto, no necesidad.` : 'Lo que más pesa son cosas necesarias, eso está bien.'}`;
+}
+
+export function spentOnText(catId, itemId) {
+  const p = st.currentPeriod();
+  const c = st.category(catId);
+  const i = st.item(catId, itemId);
+  const byItem = st.spentByItem(p);
+  const v = i ? byItem[`${catId}/${itemId}`] || 0 : st.spentByCategory(p)[catId] || 0;
+  const name = i ? `${i.emoji} ${i.name}` : `${c?.emoji} ${c?.name}`;
+  const cap = i?.cap;
+  return `${name}: llevas ${fmt(v)} este mes${cap ? ` de un tope de ${fmt(cap)} (${Math.round((v / cap) * 100)} %)` : ''}.`;
+}
+
+export function balanceText(accId) {
+  const a = st.account(accId);
+  const pk = st.S().pockets.filter((x) => x.account === accId && !x.archived);
+  let out = `${a.name}: ${fmt(st.balance(accId), a.currency)}`;
+  if (pk.length) out += `\n${pk.map((x) => `• ${x.emoji} ${x.name}: ${fmt(st.pocketBalance(x.id))}`).join('\n')}\n• Libre: ${fmt(st.freeInAccount(accId), a.currency)}`;
+  return out;
+}

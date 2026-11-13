@@ -133,37 +133,75 @@ function accountsSheet() {
 function catsSheet() {
   const S = st.S();
   const s = sheet('', { tall: true });
+  const blocks = [...Object.values(BLOCKS).filter((b) => b.id !== 'ahorro'), { id: 'ingreso', name: 'Ingresos' }];
   const draw = () => {
     s.set(`
       <h3 class="sheet-title">Categorías.</h3>
-      <p class="small muted" style="margin:0 4px 8px">Toca una para editarla. Lukas usa las palabras clave para adivinar la categoría cuando le cuentas algo.</p>
-      ${[...Object.keys(BLOCKS), 'ingreso'].map((b) => `
-        <p class="tiny muted strong" style="margin:16px 8px 6px">${b === 'ingreso' ? 'INGRESOS' : BLOCKS[b].name.toUpperCase()}</p>
-        <article class="card tight"><ul class="list">${S.categories.filter((c) => c.block === b).map((c) => `<li><button class="li" data-cat="${c.id}"><div class="emoji">${c.emoji}</div><div class="grow ellipsis">${esc(c.name)}<div class="tiny muted ellipsis">${esc((c.keywords || []).slice(0, 5).join(', '))}</div></div>${icon('chevron', 16, 'muted')}</button></li>`).join('') || '<li class="empty small">Sin categorías (el ahorro se maneja con bolsillos)</li>'}</ul></article>`).join('')}
-      <button class="btn btn-secondary btn-block mt16" id="add">${icon('plus', 18)} Nueva categoría</button>`);
-    s.el.querySelectorAll('[data-cat]').forEach((b) => b.addEventListener('click', () => editCat(b.dataset.cat)));
-    $('#add', s.el).addEventListener('click', () => editCat(null));
+      <p class="small muted" style="margin:0 4px 8px">Grupos con su detalle adentro. El grupo es lo que ves en el resumen; el detalle tiene su tope y las palabras con que Lukas lo reconoce.</p>
+      ${blocks.map((b) => `
+        <p class="tiny muted strong" style="margin:16px 8px 6px">${b.name.toUpperCase()}</p>
+        <article class="card tight"><ul class="list">${S.categories.filter((c) => c.block === b.id).map((c) => `<li><button class="li" data-cat="${c.id}"><div class="emoji">${c.emoji}</div><div class="grow ellipsis">${esc(c.name)}<div class="tiny muted ellipsis">${esc((c.items || []).map((i) => i.name).join(', '))}</div></div>${icon('chevron', 16, 'muted')}</button></li>`).join('') || '<li class="empty small">Sin grupos (el ahorro se maneja con bolsillos)</li>'}</ul></article>`).join('')}
+      <button class="btn btn-secondary btn-block mt16" id="add">${icon('plus', 18)} Nuevo grupo</button>`);
+    s.el.querySelectorAll('[data-cat]').forEach((b) => b.addEventListener('click', () => editGroup(b.dataset.cat)));
+    $('#add', s.el).addEventListener('click', () => editGroup(null));
   };
-  const editCat = (id) => {
-    const c = id ? st.category(id) : { name: '', emoji: '🏷️', block: 'disp', keywords: [] };
+
+  const editGroup = (id) => {
+    const c = id ? st.category(id) : { name: '', emoji: '🏷️', block: 'disp', items: [], keywords: [] };
+    const e = sheet('', { tall: true });
+    const drawG = () => {
+      e.set(`
+        <h3 class="sheet-title">${id ? esc(c.name) : 'Nuevo grupo.'}</h3>
+        <div class="field-row"><div class="field" style="max-width:90px"><label>Emoji</label><input id="em" value="${esc(c.emoji)}" maxlength="4"/></div><div class="field" style="margin-top:0"><label>Nombre</label><input id="nm" value="${esc(c.name)}"/></div></div>
+        <div class="field mt8"><label>Bloque</label><select id="bl">${blocks.map((b) => `<option value="${b.id}" ${b.id === c.block ? 'selected' : ''}>${b.name}</option>`).join('')}</select></div>
+        <p class="tiny muted strong" style="margin:16px 8px 6px">DETALLE</p>
+        <article class="card tight"><ul class="list">${(c.items || []).map((i) => `<li><button class="li" data-it="${i.id}"><div class="emoji">${i.emoji}</div><div class="grow ellipsis">${esc(i.name)}<div class="tiny muted ellipsis">${i.cap ? `Tope ${fmt(i.cap)} · ` : ''}${esc((i.keywords || []).slice(0, 4).join(', '))}</div></div>${icon('chevron', 16, 'muted')}</button></li>`).join('') || '<li class="empty small">Sin detalle todavía</li>'}</ul></article>
+        <button class="btn btn-secondary btn-block mt8" id="addit">${icon('plus', 18)} Agregar detalle</button>
+        <button class="btn btn-primary btn-block mt16" id="ok">Guardar grupo</button>
+        ${id ? '<button class="btn btn-danger btn-block mt8" id="del">Eliminar grupo</button>' : ''}`);
+      e.el.querySelectorAll('[data-it]').forEach((b) => b.addEventListener('click', () => { readG(); editItem(c, b.dataset.it, drawG); }));
+      $('#addit', e.el).addEventListener('click', () => { readG(); editItem(c, null, drawG); });
+      $('#ok', e.el).addEventListener('click', () => {
+        readG();
+        if (!c.name) { toast('Ponle nombre al grupo.'); return; }
+        if (!id) S.categories.push({ id: st.uid('c'), ...c });
+        st.save(); e.close(); draw();
+      });
+      $('#del', e.el)?.addEventListener('click', () => {
+        const used = S.transactions.some((t) => t.category === id) || S.recurring.some((r) => r.category === id);
+        if (used) { toast('Tiene movimientos o compromisos: renómbralo en vez de borrarlo.'); return; }
+        S.categories = S.categories.filter((x) => x.id !== id); st.save(); e.close(); draw();
+      });
+    };
+    const readG = () => {
+      c.name = $('#nm', e.el).value.trim();
+      c.emoji = $('#em', e.el).value || '🏷️';
+      c.block = $('#bl', e.el).value;
+    };
+    drawG();
+  };
+
+  const editItem = (c, iid, back) => {
+    c.items = c.items || [];
+    const i = iid ? c.items.find((x) => x.id === iid) : { name: '', emoji: '•', keywords: [] };
     const e = sheet(`
-      <h3 class="sheet-title">${id ? 'Editar' : 'Nueva'} categoría</h3>
-      <div class="field-row"><div class="field" style="max-width:90px"><label>Emoji</label><input id="em" value="${esc(c.emoji)}" maxlength="4"/></div><div class="field" style="margin-top:0"><label>Nombre</label><input id="nm" value="${esc(c.name)}"/></div></div>
-      <div class="field mt8"><label>Bloque</label><select id="bl">${[...Object.values(BLOCKS).filter((b) => b.id !== 'ahorro'), { id: 'ingreso', name: 'Ingresos' }].map((b) => `<option value="${b.id}" ${b.id === c.block ? 'selected' : ''}>${b.name}</option>`).join('')}</select></div>
-      <div class="field mt8"><label>Palabras clave (separadas por coma)</label><textarea id="kw" rows="3">${esc((c.keywords || []).join(', '))}</textarea></div>
+      <h3 class="sheet-title">${iid ? esc(i.name) : 'Nuevo detalle.'}</h3>
+      <div class="field-row"><div class="field" style="max-width:90px"><label>Emoji</label><input id="em" value="${esc(i.emoji)}" maxlength="4"/></div><div class="field" style="margin-top:0"><label>Nombre</label><input id="nm" value="${esc(i.name)}"/></div></div>
+      <div class="field mt8"><label>Tope al mes (opcional)</label><input inputmode="numeric" data-amount="COP" id="cap" value="${i.cap ? formatInput(String(i.cap)) : ''}" placeholder="Sin tope"/></div>
+      <div class="field mt8"><label>Palabras con que lo reconoce Lukas (separadas por coma)</label><textarea id="kw" rows="3">${esc((i.keywords || []).join(', '))}</textarea></div>
       <button class="btn btn-primary btn-block mt16" id="ok">Guardar</button>
-      ${id ? '<button class="btn btn-danger btn-block mt8" id="del">Eliminar</button>' : ''}`);
+      ${iid ? '<button class="btn btn-danger btn-block mt8" id="del">Eliminar detalle</button>' : ''}`);
+    bindAmountInputs(e.el);
     $('#ok', e.el).addEventListener('click', () => {
       const name = $('#nm', e.el).value.trim();
       if (!name) return;
-      const data = { name, emoji: $('#em', e.el).value || '🏷️', block: $('#bl', e.el).value, keywords: $('#kw', e.el).value.split(',').map((k) => k.trim()).filter(Boolean) };
-      if (id) Object.assign(c, data); else S.categories.push({ id: st.uid('c'), ...data });
-      st.save(); e.close(); draw();
+      const data = { name, emoji: $('#em', e.el).value || '•', cap: inputToNumber($('#cap', e.el).value) || undefined, keywords: $('#kw', e.el).value.split(',').map((k) => k.trim()).filter(Boolean) };
+      if (iid) Object.assign(i, data); else c.items.push({ id: st.uid('i'), ...data });
+      st.save(); e.close(); back();
     });
-    $('#del', e.el)?.addEventListener('click', async () => {
-      const used = S.transactions.some((t) => t.category === id) || S.recurring.some((r) => r.category === id);
-      if (used) { toast('Tiene movimientos o compromisos: renómbrala en vez de borrarla.'); return; }
-      S.categories = S.categories.filter((x) => x.id !== id); st.save(); e.close(); draw();
+    $('#del', e.el)?.addEventListener('click', () => {
+      if (S.transactions.some((t) => t.item === iid) || S.recurring.some((r) => r.item === iid)) { toast('Tiene movimientos: renómbralo en vez de borrarlo.'); return; }
+      c.items = c.items.filter((x) => x.id !== iid); st.save(); e.close(); back();
     });
   };
   draw();

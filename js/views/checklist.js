@@ -19,7 +19,7 @@ export async function payCommitment(id, { edit = false } = {}) {
       nav.refresh();
       return;
     }
-    st.addTx({ type: 'expense', amount: item.amount - item.paid, account: item.account, category: item.category, recurring: item.id, note: item.name, date: todayISO() });
+    st.addTx({ type: 'expense', amount: item.amount - item.paid, account: item.account, category: item.category, item: item.item, recurring: item.id, note: item.name, date: todayISO() });
     toast(`${phrase('paid')} ${item.name}`);
     nav.refresh();
     return;
@@ -52,7 +52,7 @@ export async function payCommitment(id, { edit = false } = {}) {
   $('#save', s.el).addEventListener('click', () => {
     const amount = inputToNumber(amt.value);
     if (!amount) { toast('Ponle un monto, mi llave.'); return; }
-    st.addTx({ type: 'expense', amount, account: $('#acc', s.el).value, category: item.category, recurring: item.id, note: item.name, date: $('#date', s.el).value || todayISO(), closes: closes.checked });
+    st.addTx({ type: 'expense', amount, account: $('#acc', s.el).value, category: item.category, item: item.item, recurring: item.id, note: item.name, date: $('#date', s.el).value || todayISO(), closes: closes.checked });
     s.close();
     toast(closes.checked ? `${phrase('paid')} ${item.name}` : `Abono anotado: ${fmt(amount)}`);
     nav.refresh();

@@ -75,7 +75,7 @@ document.addEventListener('visibilitychange', () => {
 function start() {
   st.load();
   if (!st.S().onboarded) {
-    startOnboarding(() => render());
+    startOnboarding((opts = {}) => { render(); if (opts.payday) setTimeout(() => openPayday(opts.payday), 300); });
     return;
   }
   render();

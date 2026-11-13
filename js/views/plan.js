@@ -9,6 +9,7 @@ import { BLOCKS } from '../seed.js';
 import { downloadICS } from '../ics.js';
 
 let tab = 'budget';
+const open = new Set(); // grupos expandidos en el presupuesto
 
 export function render(params = {}) {
   if (params.tab) { tab = params.tab; nav.params = {}; }
@@ -22,27 +23,43 @@ export function render(params = {}) {
 }
 
 // ---------- Presupuesto ----------
+function groupCard(g) {
+  const isOpen = open.has(g.id);
+  const color = BLOCKS[g.block]?.color || 'var(--blue)';
+  const recLine = (r) => `<div class="row between small" style="padding:6px 0"><span>${r.done ? '✅' : r.status === 'late' ? '🔴' : '⬜️'} ${esc(r.name)} <span class="tiny muted">· ${esc(st.account(r.account)?.name)} · ${r.day ? `día ${r.day}` : 'día variable'}</span></span><span class="num">${r.done ? '<span class="tag done">Pago</span>' : r.paid ? `${fmtShort(r.paid)} / ${fmtShort(r.amount)}` : fmtShort(r.amount)}</span></div>`;
+  const itemLine = (i) => {
+    const recs = i.recs || [];
+    if (recs.length) return recs.map(recLine).join('');
+    if (!i.cap && !i.spent) return '';
+    return `<button class="stack gap4" style="width:100%;text-align:left;padding:6px 0" data-cap="${g.id}/${i.id}">
+      <div class="row between small"><span>${i.emoji} ${esc(i.name)}${i.account ? ` <span class="tiny muted">· ${esc(st.account(i.account)?.name)}</span>` : ''}</span><span class="num">${fmtShort(i.spent)}${i.cap ? ` <span class="muted">/ ${fmtShort(i.cap)}</span>` : ''}</span></div>
+      ${i.cap ? bar(i.spent / i.cap, color) : ''}
+    </button>`;
+  };
+  const orphan = g.recs.filter((r) => !g.items.some((i) => i.id === r.item));
+  const detail = g.items.map(itemLine).join('') + orphan.map(recLine).join('') + (g.loose ? `<div class="row between small" style="padding:6px 0"><span class="muted">Sin detalle</span><span class="num">${fmtShort(g.loose)}</span></div>` : '');
+  const pend = g.recs.filter((r) => !r.done).length;
+  return `<article class="card" style="padding:16px 20px">
+    <button class="row between" style="width:100%;text-align:left" data-group="${g.id}">
+      <span class="row" style="gap:10px"><span class="emoji">${g.emoji}</span><span><strong>${esc(g.name)}</strong><span class="tiny muted" style="display:block">${g.recs.length ? (pend ? `${pend} de ${g.recs.length} por pagar` : 'Todo pago ✓') : g.items.filter((i) => i.cap).length ? 'Con tope' : 'Sin tope'}</span></span></span>
+      <span class="row" style="gap:6px"><span class="num small">${fmtShort(g.spent)}${g.budget ? ` <span class="muted">/ ${fmtShort(g.budget)}</span>` : ''}</span>${icon(isOpen ? 'down' : 'chevron', 16, 'muted')}</span>
+    </button>
+    ${g.budget ? `<div class="mt8">${bar(g.spent / g.budget, color)}</div>` : ''}
+    ${isOpen ? `<div class="mt8" style="border-top:1px solid var(--pebble);padding-top:6px">${detail || '<p class="small muted" style="margin:6px 0">Nada este mes.</p>'}${g.items.some((i) => i.cap !== undefined || g.block === 'gastos') ? '<p class="tiny muted" style="margin:6px 0 0">Toca un detalle para cambiar su tope.</p>' : ''}</div>` : ''}
+  </article>`;
+}
+
 function budget() {
   const S = st.S();
   const p = st.currentPeriod();
   const bs = st.blockSummary(p);
-  const spent = st.spentByCategory(p);
+  const groups = st.groupSummary(p);
   const income = st.incomeInPeriod(p);
   const d = disponibleInfo(p);
-  const block = (k, rows) => `
-    <div class="section-title"><h2><span class="dot" style="background:${BLOCKS[k].color};width:12px;height:12px"></span> ${BLOCKS[k].name}.</h2><span class="small muted num">${fmtShort(bs[k].spent)} / ${fmtShort(bs[k].budget)}</span></div>
-    <article class="card">${rows}</article>`;
-  const catRow = (c) => {
-    const s = spent[c.id] || 0;
-    return `<button class="stack gap4" style="width:100%;text-align:left;padding:6px 0" data-cap="${c.id}">
-      <div class="row between small"><span>${c.emoji} ${esc(c.name)}${c.account ? ` <span class="muted tiny">· ${esc(st.account(c.account)?.name)}</span>` : ''}</span><span class="num">${fmtShort(s)}${c.cap ? ` <span class="muted">/ ${fmtShort(c.cap)}</span>` : ''}</span></div>
-      ${c.cap ? bar(s / c.cap, BLOCKS.gastos.color) : ''}
-    </button>`;
-  };
-  const gastosCats = S.categories.filter((c) => c.block === 'gastos' && (c.cap || spent[c.id]));
-  const dispCats = S.categories.filter((c) => c.block === 'disp' && spent[c.id]);
-  const compRows = st.checklist(p).map((c) => `<div class="row between small" style="padding:4px 0"><span>${c.done ? '✅' : '⬜️'} ${esc(c.name)}</span><span class="num">${fmtShort(c.paid)} <span class="muted">/ ${fmtShort(c.amount)}</span></span></div>`).join('');
   const assigned = bs.comp.budget + bs.gastos.budget + bs.disp.budget + (bs.ahorro.budget > 1 ? bs.ahorro.budget : 0);
+  const head = (k) => `<div class="section-title"><h2><span class="dot" style="background:${BLOCKS[k].color};width:12px;height:12px"></span> ${BLOCKS[k].name}.</h2><span class="small muted num">${fmtShort(bs[k].spent)} / ${fmtShort(bs[k].budget > 1 ? bs[k].budget : 0)}</span></div>`;
+  const list = (k) => groups.filter((g) => g.block === k && (g.budget || g.spent || k !== 'gastos')).map(groupCard).join('');
+  const quiet = groups.filter((g) => g.block === 'gastos' && !g.budget && !g.spent);
 
   return `
     <article class="card card-dark">
@@ -50,21 +67,26 @@ function budget() {
       <div class="hero-money">${fmt(income)}</div>
       <div class="mt12 stack gap4 small">
         <div class="row between"><span class="muted">Compromisos</span><span class="num">${fmt(bs.comp.budget)}</span></div>
-        <div class="row between"><span class="muted">Gastos con tope</span><span class="num">${fmt(bs.gastos.budget)}</span></div>
+        <div class="row between"><span class="muted">Gastos (topes + pateos)</span><span class="num">${fmt(bs.gastos.budget)}</span></div>
         <div class="row between"><span class="muted">Disponible</span><span class="num">${fmt(bs.disp.budget)}</span></div>
         <div class="row between"><span class="muted">Ahorro y bolsillos</span><span class="num">${fmt(bs.ahorro.budget > 1 ? bs.ahorro.budget : 0)}</span></div>
         <div class="row between" style="border-top:1px solid rgba(255,255,255,.2);padding-top:6px;margin-top:4px"><strong>${income - assigned >= 0 ? 'Sin asignar' : 'Te pasaste'}</strong><strong class="num">${fmt(Math.abs(income - assigned))}</strong></div>
       </div>
     </article>
+    <p class="tiny muted" style="margin:10px 8px 0">Toca un grupo para ver el detalle: qué se paga, qué día y si ya está pago.</p>
 
-    ${block('comp', compRows || '<p class="muted small">Sin compromisos.</p>')}
-    ${block('gastos', gastosCats.map(catRow).join('') + `<p class="tiny muted" style="margin:8px 0 0">Toca una categoría para cambiar su tope.</p>`)}
-    ${block('disp', `
+    ${head('comp')}${list('comp')}
+    ${head('gastos')}${list('gastos')}
+    ${quiet.length ? `<p class="tiny muted" style="margin:8px 8px 0">Sin movimientos: ${quiet.map((g) => `${g.emoji} ${esc(g.name)}`).join(' · ')}</p>` : ''}
+    ${head('disp')}
+    <article class="card" style="padding:16px 20px">
       <div class="row between"><span>Presupuesto del mes</span><button class="link" data-edit-disp>${fmt(S.settings.disponible)} ${icon('edit', 14)}</button></div>
       <div class="mt8">${bar(d.used, BLOCKS.disp.color)}</div>
-      <p class="small muted" style="margin:8px 0">${d.remaining >= 0 ? `Quedan ${fmt(d.remaining)} · ${fmt(d.perDay)}/día` : `Te pasaste ${fmt(-d.remaining)}`}</p>
-      ${dispCats.map(catRow).join('')}`)}
-    ${block('ahorro', S.pockets.filter((x) => !x.archived).map((x) => `<div class="row between small" style="padding:4px 0"><span>${x.emoji} ${esc(x.name)}</span><span class="num">${fmt(st.pocketBalance(x.id))}</span></div>`).join('') + `<div class="row between small" style="padding:4px 0"><span>💵 ARQ</span><span class="num">${fmt(st.balance('arq'), 'USD')}</span></div>`)}
+      <p class="small muted" style="margin:8px 0 0">${d.remaining >= 0 ? `Quedan ${fmt(d.remaining)} · ${fmt(d.perDay)}/día` : `Te pasaste ${fmt(-d.remaining)}`}</p>
+    </article>
+    ${list('disp')}
+    ${head('ahorro')}
+    <article class="card">${S.pockets.filter((x) => !x.archived).map((x) => `<div class="row between small" style="padding:4px 0"><span>${x.emoji} ${esc(x.name)}</span><span class="num">${fmt(st.pocketBalance(x.id))}</span></div>`).join('')}<div class="row between small" style="padding:4px 0"><span>💵 ARQ</span><span class="num">${fmt(st.balance('arq'), 'USD')}</span></div></article>
   `;
 }
 
@@ -105,14 +127,19 @@ function recurring() {
   const paused = S.recurring.filter((r) => !r.active);
   const row = (r) => `<li><button class="li no-icon" data-rec="${r.id}"><div class="grow"><div class="ellipsis">${esc(r.name)}</div><div class="tiny muted">${esc(st.account(r.account)?.name)} · ${r.day ? `día ${r.day}` : 'día variable'}${r.note ? ` · ${esc(r.note)}` : ''}</div></div><span class="amount">${fmtShort(r.amount)}</span>${icon('chevron', 16, 'muted')}</button></li>`;
   const byAcc = st.activeAccounts().map((a) => ({ a, total: st.commitmentsFor(a.id) })).filter((x) => x.total);
+  const groups = S.categories.filter((c) => act.some((r) => r.category === c.id));
   return `
     <article class="card">
       <p class="eyebrow">Total al mes</p>
       <div class="h2 num">${fmt(st.commitmentsTotal())}</div>
       <div class="mt8 stack gap4">${byAcc.map(({ a, total }) => `<div class="row between small"><span><span class="dot" style="background:${a.color}"></span> ${esc(a.name)}</span><span class="num">${fmt(total)}</span></div>`).join('')}</div>
     </article>
-    <div class="section-title"><h2>Activos.</h2><button class="link" data-ics>${icon('calendar', 16)} Al Calendario</button></div>
-    <article class="card tight"><ul class="list">${act.map(row).join('')}</ul></article>
+    <div class="row between" style="margin:20px 4px 0"><span class="small muted">Agrupados por categoría</span><button class="link" data-ics>${icon('calendar', 16)} Al Calendario</button></div>
+    ${groups.map((c) => {
+      const list = act.filter((r) => r.category === c.id);
+      return `<div class="section-title" style="margin-top:16px"><h2 style="font-size:19px">${c.emoji} ${esc(c.name)}.</h2><span class="small muted num">${fmt(list.reduce((s, r) => s + r.amount, 0))}</span></div>
+      <article class="card tight"><ul class="list">${list.map(row).join('')}</ul></article>`;
+    }).join('')}
     ${paused.length ? `<div class="section-title"><h2>En pausa.</h2></div><article class="card tight"><ul class="list">${paused.map(row).join('')}</ul></article>` : ''}
     <button class="btn btn-secondary btn-block mt16" data-new-rec>${icon('plus', 18)} Nuevo compromiso</button>
     <p class="tiny muted" style="margin:12px 8px">«Al Calendario» crea los vencimientos con día fijo en el Calendario de tu iPhone, con alarma a las 9 a. m., para que te avise aunque no abras la app.</p>
@@ -143,8 +170,10 @@ function debts() {
 }
 
 // ---------- Hojas de edición ----------
-function editCap(id) {
-  const c = st.category(id);
+function editCap(key) {
+  const [cid, iid] = key.split('/');
+  const c = st.item(cid, iid);
+  if (!c) return;
   const s = sheet(`
     <h3 class="sheet-title">${c.emoji} ${esc(c.name)}</h3>
     <p class="small muted" style="margin:0 4px">Tope máximo por mes. Pon 0 para no tener tope.</p>
@@ -232,7 +261,8 @@ function editPocket(pid) {
 
 function editRec(rid) {
   const S = st.S();
-  const r = rid ? st.recurringItem(rid) : { name: '', amount: 0, account: 'nequi', category: 'subs', day: null, active: true, note: '' };
+  const r = rid ? st.recurringItem(rid) : { name: '', amount: 0, account: 'nequi', category: 'suscripciones', item: null, day: null, active: true, note: '' };
+  const itemOpts = (cid, sel) => `<option value="">Sin detalle</option>${(st.category(cid)?.items || []).map((i) => `<option value="${i.id}" ${i.id === sel ? 'selected' : ''}>${i.emoji} ${esc(i.name)}</option>`).join('')}`;
   const s = sheet(`
     <h3 class="sheet-title">${rid ? esc(r.name) : 'Nuevo compromiso.'}</h3>
     <div class="field"><label>Nombre</label><input id="nm" value="${esc(r.name)}" placeholder="Ej: Netflix"/></div>
@@ -242,19 +272,21 @@ function editRec(rid) {
     </div>
     <div class="field-row mt8">
       <div class="field"><label>Cuenta</label><select id="acc">${st.activeAccounts().filter((a) => a.currency === 'COP').map((a) => `<option value="${a.id}" ${a.id === r.account ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></div>
-      <div class="field"><label>Categoría</label><select id="ct">${S.categories.filter((c) => c.block === 'comp').map((c) => `<option value="${c.id}" ${c.id === r.category ? 'selected' : ''}>${c.emoji} ${esc(c.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Grupo</label><select id="ct">${S.categories.filter((c) => c.block !== 'ingreso').map((c) => `<option value="${c.id}" ${c.id === r.category ? 'selected' : ''}>${c.emoji} ${esc(c.name)}</option>`).join('')}</select></div>
     </div>
+    <div class="field mt8"><label>Detalle</label><select id="it">${itemOpts(r.category, r.item)}</select></div>
     <div class="field mt8"><label>Nota</label><input id="nt" value="${esc(r.note || '')}"/></div>
     <label class="field row between mt8"><span>Activo</span><span class="switch"><input type="checkbox" id="ac" ${r.active ? 'checked' : ''}/><span></span></span></label>
     <button class="btn btn-primary btn-block mt16" id="ok">Guardar</button>
     ${rid ? `<button class="btn btn-danger btn-block mt8" id="del">Eliminar</button>` : ''}`);
   bindAmountInputs(s.el);
+  $('#ct', s.el).addEventListener('change', (e) => { $('#it', s.el).innerHTML = itemOpts(e.target.value, null); });
   $('#ok', s.el).addEventListener('click', () => {
     const name = $('#nm', s.el).value.trim();
     const amount = inputToNumber($('#am', s.el).value);
     if (!name || !amount) { toast('Falta nombre o monto.'); return; }
     const day = parseInt($('#dy', s.el).value, 10);
-    const data = { name, amount, day: day >= 1 && day <= 31 ? day : null, account: $('#acc', s.el).value, category: $('#ct', s.el).value, note: $('#nt', s.el).value.trim(), active: $('#ac', s.el).checked };
+    const data = { name, amount, day: day >= 1 && day <= 31 ? day : null, account: $('#acc', s.el).value, category: $('#ct', s.el).value, item: $('#it', s.el).value || null, note: $('#nt', s.el).value.trim(), active: $('#ac', s.el).checked };
     if (rid) Object.assign(r, data);
     else S.recurring.push({ id: st.uid('r'), ...data });
     st.save(); s.close(); nav.refresh();
@@ -302,7 +334,7 @@ function payDebt(did) {
   $('#ok', s.el).addEventListener('click', () => {
     const v = inputToNumber($('#v', s.el).value);
     if (!v) return;
-    st.addTx(owe ? { type: 'expense', amount: v, account: $('#acc', s.el).value, category: 'credito', debt: did, note: `Abono a ${d.name}` } : { type: 'income', amount: v, account: $('#acc', s.el).value, category: 'otros_ing', debt: did, note: `Pago de ${d.name}` });
+    st.addTx(owe ? { type: 'expense', amount: v, account: $('#acc', s.el).value, category: 'creditos', item: 'credito', debt: did, note: `Abono a ${d.name}` } : { type: 'income', amount: v, account: $('#acc', s.el).value, category: 'otros_ing', item: 'otros_ing', debt: did, note: `Pago de ${d.name}` });
     s.close(); toast(phrase('paid')); nav.refresh();
   });
 }
@@ -312,6 +344,7 @@ export function bind(root) {
     const g = (sel) => e.target.closest(sel);
     let el;
     if ((el = g('[data-ptab]'))) { tab = el.dataset.ptab; nav.refresh(); return; }
+    if ((el = g('[data-group]'))) { open.has(el.dataset.group) ? open.delete(el.dataset.group) : open.add(el.dataset.group); nav.refresh(); return; }
     if ((el = g('[data-cap]'))) return editCap(el.dataset.cap);
     if (g('[data-edit-disp]')) return editDisp();
     if ((el = g('[data-alloc]'))) { e.stopPropagation(); return allocSheet(el.dataset.alloc, 1); }

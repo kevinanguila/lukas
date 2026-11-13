@@ -7,14 +7,16 @@ import { esc, sheet, $, $$, toast, bindAmountInputs, icon } from '../ui.js';
 import { phrase } from '../lukas.js';
 import { fetchTRM } from '../trm.js';
 
-export function openPayday() {
+export function openPayday(opts = {}) {
   const S = st.S();
   const p = st.currentPeriod();
   if (st.paydayDone(p)) return openGiro();
 
   const tpl = S.planTemplate;
   const data = {
-    date: todayISO() < p.start ? p.start : todayISO() > p.end ? p.end : todayISO() === p.start ? p.start : todayISO(),
+    date: opts.date || (todayISO() < p.start ? p.start : todayISO() > p.end ? p.end : todayISO()),
+    recv: 'nu', // cuenta a la que llegaron los pesos
+    keep: 0, // lo que se queda en esa cuenta (si no es NU)
     usd: S.settings.monthlyUSD,
     arqUSD: tpl.arqUSD || 0,
     arqGot: tpl.arqUSD ? Math.max(0, tpl.arqUSD - 3) : 0,
@@ -29,12 +31,13 @@ export function openPayday() {
   const s = sheet('', { tall: true });
 
   const nequiNeed = () => st.commitmentsFor('nequi') + S.settings.disponible;
-  const capsNU = () => S.categories.filter((c) => c.block === 'gastos' && c.cap && (c.account || 'nu') === 'nu').reduce((a, c) => a + c.cap, 0);
-  const capsOther = () => S.categories.filter((c) => c.block === 'gastos' && c.cap && c.account === 'nequi').reduce((a, c) => a + c.cap, 0);
+  const capsNU = () => st.allItems().filter(({ cat, item }) => cat.block === 'gastos' && item.cap && (item.account || 'nu') === 'nu').reduce((a, { item }) => a + item.cap, 0);
   const main = () => S.pockets.find((x) => x.main && !x.archived);
   const others = () => S.pockets.filter((x) => !x.main && !x.archived && x.account === 'nu');
   const compNU = () => st.commitmentsFor('nu');
-  const absorber = () => data.cop - data.giro - capsNU() - compNU() - Object.entries(data.pockets).reduce((a, [pid, v]) => a + (st.pocket(pid) && !st.pocket(pid).archived && !st.pocket(pid).main ? v : 0), 0);
+  const recvName = () => st.account(data.recv)?.name || 'NU';
+  const keep = () => (data.recv === 'nu' ? 0 : data.keep);
+  const absorber = () => data.cop - data.giro - keep() - capsNU() - compNU() - Object.entries(data.pockets).reduce((a, [pid, v]) => a + (st.pocket(pid) && !st.pocket(pid).archived && !st.pocket(pid).main ? v : 0), 0);
 
   // Sobrantes del periodo anterior: bolsillos que se renuevan cada mes
   const prev = prevPeriod(p);
@@ -56,9 +59,10 @@ export function openPayday() {
         <div class="field"><label>Te pagaron (USD)</label><input inputmode="decimal" data-amount="USD" id="usd" value="${formatInput(String(data.usd), 'USD')}"/></div>
         <div class="field-row mt8">
           <div class="field"><label>A ARQ (USD)</label><input inputmode="decimal" data-amount="USD" id="arq" value="${data.arqUSD ? formatInput(String(data.arqUSD).replace('.', ','), 'USD') : ''}" placeholder="0"/></div>
-          <div class="field"><label>A NU (USD)</label><input disabled value="${formatInput(String(toNU).replace('.', ','), 'USD')}" id="tonu"/></div>
+          <div class="field"><label>En pesos (USD)</label><input disabled value="${formatInput(String(toNU).replace('.', ','), 'USD')}" id="tonu"/></div>
         </div>
-        <div class="field mt8"><label>Lo que llegó a NU (COP)</label><input inputmode="numeric" data-amount="COP" id="cop" value="${data.cop ? formatInput(String(data.cop)) : ''}" placeholder="Ej: 5.000.000"/></div>
+        <div class="field mt8"><label>¿A qué cuenta llegaron los pesos?</label><select id="recv">${st.activeAccounts().filter((a) => a.currency === 'COP').map((a) => `<option value="${a.id}" ${a.id === data.recv ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></div>
+        <div class="field mt8"><label>Lo que llegó en pesos (COP)</label><input inputmode="numeric" data-amount="COP" id="cop" value="${data.cop ? formatInput(String(data.cop)) : ''}" placeholder="Ej: 5.000.000"/></div>
         <div class="field mt8 ${data.arqUSD ? '' : 'hidden'}" id="arqgotwrap"><label>Lo que llegó a ARQ (USD, después de comisión)</label><input inputmode="decimal" data-amount="USD" id="arqgot" value="${data.arqGot ? formatInput(String(data.arqGot).replace('.', ','), 'USD') : ''}"/></div>
         <div class="field-row mt8">
           <div class="field"><label>Fecha</label><input type="date" id="date" value="${data.date}"/></div>
@@ -77,6 +81,7 @@ export function openPayday() {
         data.arqGot = inputToNumber($('#arqgot', s.el).value, 'USD');
         data.trm = inputToNumber($('#trm', s.el).value, 'USD') || null;
         data.date = $('#date', s.el).value || todayISO();
+        data.recv = $('#recv', s.el).value;
         const toNU2 = data.usd - data.arqUSD;
         $('#tonu', s.el).value = formatInput(String(toNU2).replace('.', ','), 'USD');
         $('#arqgotwrap', s.el).classList.toggle('hidden', !data.arqUSD);
@@ -99,7 +104,7 @@ export function openPayday() {
       if (!data.trm) loadTRM();
       $('#next', s.el).addEventListener('click', () => {
         recalc();
-        if (!data.cop && data.usd - data.arqUSD > 0) { toast('Escribe cuánto llegó a NU en pesos.'); return; }
+        if (!data.cop && data.usd - data.arqUSD > 0) { toast('Escribe cuánto llegó en pesos.'); return; }
         if (!data.giro) data.giro = nequiNeed();
         step = leftovers.length ? 2 : 3;
         draw();
@@ -131,13 +136,16 @@ export function openPayday() {
         <div class="sheet-head"><button class="btn btn-ghost btn-sm" data-back>${icon('back', 18)} Atrás</button><strong>Reparto</strong><span style="width:70px"></span></div>
         ${stepsBar(3)}
         <h1>El reparto.</h1>
-        <p class="muted" style="margin:6px 4px 16px">De los ${fmt(data.cop)} que llegaron a NU. Organizado por banco, como te gusta.</p>
+        <p class="muted" style="margin:6px 4px 16px">De los ${fmt(data.cop)} que llegaron a ${esc(recvName())}. Organizado por banco, como te gusta.</p>
+        ${data.recv !== 'nu' ? `
+        <div class="section-title" style="margin-top:8px"><h2><span class="dot" style="background:${st.account(data.recv)?.color}"></span> Se queda en ${esc(recvName())}.</h2></div>
+        <article class="card"><div class="field" style="background:var(--fog)"><label>Lo que dejas en ${esc(recvName())}</label><input inputmode="numeric" data-amount="COP" id="keep" value="${data.keep ? formatInput(String(data.keep)) : ''}" placeholder="0"/></div><p class="tiny muted" style="margin:8px 4px 0">El resto se va a Nequi y a NU.</p></article>` : ''}
 
         <div class="section-title" style="margin-top:8px"><h2><span class="dot" style="background:#00a1b3"></span> A Nequi.</h2></div>
         <article class="card">
           <div class="row between small"><span class="muted">Compromisos por Nequi</span><span class="num">${fmt(st.commitmentsFor('nequi'))}</span></div>
           <div class="row between small mt8"><span class="muted">Disponible</span><span class="num">${fmt(S.settings.disponible)}</span></div>
-          <div class="field mt12" style="background:var(--fog)"><label>Giro único NU → Nequi</label><input inputmode="numeric" data-amount="COP" id="giro" value="${formatInput(String(data.giro))}"/></div>
+          <div class="field mt12" style="background:var(--fog)"><label>Giro único ${esc(recvName())} → Nequi</label><input inputmode="numeric" data-amount="COP" id="giro" value="${formatInput(String(data.giro))}"/></div>
           ${nequiNow > 0 ? `<button class="link mt8" id="minusNequi">Nequi ya tiene ${fmt(nequiNow)}: restarlo del giro</button>` : ''}
         </article>
 
@@ -156,6 +164,7 @@ export function openPayday() {
       bindAmountInputs(s.el);
       const recalc = () => {
         data.giro = inputToNumber($('#giro', s.el).value);
+        if ($('#keep', s.el)) data.keep = inputToNumber($('#keep', s.el).value);
         $$('[data-pk]', s.el).forEach((i) => (data.pockets[i.dataset.pk] = inputToNumber(i.value)));
         const r = absorber();
         const el = $('#rest', s.el);
@@ -179,8 +188,8 @@ export function openPayday() {
     const toNU = data.usd - data.arqUSD;
     const rate = data.cop && toNU ? data.cop / toNU : null;
     const pid = st.uid('pay');
-    if (data.cop) st.addTx({ type: 'income', amount: data.cop, account: 'nu', category: 'sueldo', date: data.date, note: `Pago Deel ${periodLabel(p)}`, usd: toNU, rate, trm: data.trm, payday: pid });
-    if (data.arqUSD) st.addTx({ type: 'income', amount: data.arqGot || data.arqUSD, account: 'arq', category: 'sueldo', date: data.date, note: `Pago Deel ${periodLabel(p)} (directo a ARQ)`, usd: data.arqUSD, rate: rate || st.usdRate(), trm: data.trm, fee: data.arqUSD - (data.arqGot || data.arqUSD), payday: pid });
+    if (data.cop) st.addTx({ type: 'income', amount: data.cop, account: data.recv, category: 'sueldo', item: 'sueldo', date: data.date, note: `Pago Deel ${periodLabel(p)}`, usd: toNU, rate, trm: data.trm, payday: pid });
+    if (data.arqUSD) st.addTx({ type: 'income', amount: data.arqGot || data.arqUSD, account: 'arq', category: 'sueldo', item: 'sueldo', date: data.date, note: `Pago Deel ${periodLabel(p)} (directo a ARQ)`, usd: data.arqUSD, rate: rate || st.usdRate(), trm: data.trm, fee: data.arqUSD - (data.arqGot || data.arqUSD), payday: pid });
     const m = main();
     // Sobrantes → meta principal
     for (const [id, on] of Object.entries(data.leftovers)) {
@@ -194,7 +203,13 @@ export function openPayday() {
     }
     const rest = absorber();
     if (m && rest > 0) st.addTx({ type: 'alloc', pocket: m.id, amount: rest, date: data.date, savings: true, note: 'Reparto del pago' });
-    S.plans[p.key] = { giroNequi: data.giro, pockets: { ...data.pockets, ...(m ? { [m.id]: Math.max(0, rest) } : {}) }, arqUSD: data.arqUSD, incomeCOP: data.cop, steps: { giro: data.giro === 0 } };
+    const transfers = [];
+    if (data.giro > 0) transfers.push({ id: st.uid('tr'), from: data.recv, to: 'nequi', amount: data.giro, done: false });
+    if (data.recv !== 'nu') {
+      const toNu = data.cop - data.giro - keep();
+      if (toNu > 0) transfers.push({ id: st.uid('tr'), from: data.recv, to: 'nu', amount: toNu, done: false });
+    }
+    S.plans[p.key] = { giroNequi: data.giro, recv: data.recv, pockets: { ...data.pockets, ...(m ? { [m.id]: Math.max(0, rest) } : {}) }, arqUSD: data.arqUSD, incomeCOP: data.cop, transfers };
     S.planTemplate = { arqUSD: data.arqUSD, pockets: Object.fromEntries(Object.entries(data.pockets).filter(([id]) => st.pocket(id) && !st.pocket(id).main)) };
     S.settings.monthlyUSD = data.usd;
     if (rate) S.settings.fallbackRate = Math.round(rate);
@@ -205,33 +220,48 @@ export function openPayday() {
 }
 
 // Checklist de transferencias del reparto
+export function pendingTransfers(plan) {
+  if (!plan) return [];
+  if (plan.transfers) return plan.transfers.filter((t) => !t.done);
+  return plan.steps && !plan.steps.giro && plan.giroNequi > 0 ? [{ from: 'nu', to: 'nequi', amount: plan.giroNequi }] : [];
+}
+
 export function openGiro(fresh = false) {
   const S = st.S();
   const p = st.currentPeriod();
   const plan = S.plans[p.key];
   if (!plan) { toast('Ya registraste el pago de este mes.'); return; }
-  const done = plan.steps?.giro;
-  const s = sheet(`
-    <h1 style="margin:8px 4px">${fresh ? esc(phrase('good')) : 'El reparto.'}</h1>
-    <p class="muted" style="margin:6px 4px 16px">${fresh ? 'Reparto guardado. Los bolsillos de NU ya quedaron apartados. Te falta una sola transferencia:' : 'Transferencias del mes:'}</p>
-    <article class="card tight"><ul class="list">
-      <li class="li ${done ? 'done' : ''}"><button class="check ${done ? 'on' : ''}" id="g">${icon('check', 16)}</button><div class="grow"><div class="ttl">Giro NU → Nequi</div><div class="tiny muted">Por Bre-B, gratis e inmediato</div></div><span class="amount">${fmt(plan.giroNequi)}</span></li>
-      ${plan.arqUSD ? `<li class="li done"><span class="check on">${icon('check', 16)}</span><div class="grow"><div class="ttl">Deel → ARQ</div><div class="tiny muted">Ya registrado</div></div><span class="amount">${fmt(plan.arqUSD, 'USD')}</span></li>` : ''}
-    </ul></article>
-    <button class="btn btn-secondary btn-block mt16" data-close>Cerrar</button>`);
-  $('#g', s.el).addEventListener('click', () => {
-    if (plan.steps.giro) {
-      const tx = S.transactions.find((t) => t.id === plan.steps.giroTx);
-      if (tx) st.deleteTx(tx.id);
-      plan.steps.giro = false; plan.steps.giroTx = null;
-    } else {
-      const tx = st.addTx({ type: 'transfer', amount: plan.giroNequi, account: 'nu', toAccount: 'nequi', toAmount: plan.giroNequi, note: 'Giro del mes' });
-      plan.steps.giro = true; plan.steps.giroTx = tx.id;
-      toast(phrase('paid'));
-    }
+  // Compatibilidad con planes viejos (un solo giro)
+  if (!plan.transfers) {
+    plan.transfers = plan.giroNequi > 0 ? [{ id: st.uid('tr'), from: 'nu', to: 'nequi', amount: plan.giroNequi, done: !!plan.steps?.giro, txId: plan.steps?.giroTx || null }] : [];
     st.save();
-    s.close();
-    nav.refresh();
-  });
+  }
+  const s = sheet('');
+  const draw = () => {
+    const pend = plan.transfers.filter((t) => !t.done).length;
+    s.set(`
+      <h1 style="margin:8px 4px">${fresh ? esc(phrase('good')) : 'El reparto.'}</h1>
+      <p class="muted" style="margin:6px 4px 16px">${fresh ? 'Reparto guardado. Los bolsillos de NU ya quedaron apartados.' : ''} ${pend ? `Te falta${pend > 1 ? 'n' : ''} ${pend} transferencia${pend > 1 ? 's' : ''}. Márcala${pend > 1 ? 's' : ''} cuando la${pend > 1 ? 's' : ''} hagas:` : '¡Todas las transferencias hechas!'}</p>
+      <article class="card tight"><ul class="list">
+        ${plan.transfers.map((t) => `<li class="li ${t.done ? 'done' : ''}"><button class="check ${t.done ? 'on' : ''}" data-tr="${t.id}">${icon('check', 16)}</button><div class="grow"><div class="ttl">${esc(st.account(t.from)?.name)} → ${esc(st.account(t.to)?.name)}</div><div class="tiny muted">Por Bre-B, gratis e inmediato</div></div><span class="amount">${fmt(t.amount)}</span></li>`).join('')}
+        ${plan.arqUSD ? `<li class="li done"><span class="check on">${icon('check', 16)}</span><div class="grow"><div class="ttl">Deel → ARQ</div><div class="tiny muted">Ya registrado</div></div><span class="amount">${fmt(plan.arqUSD, 'USD')}</span></li>` : ''}
+      </ul></article>
+      <button class="btn btn-secondary btn-block mt16" data-close>Cerrar</button>`);
+    s.el.querySelectorAll('[data-tr]').forEach((b) => b.addEventListener('click', () => {
+      const t = plan.transfers.find((x) => x.id === b.dataset.tr);
+      if (t.done) {
+        if (t.txId) st.deleteTx(t.txId);
+        t.done = false; t.txId = null;
+      } else {
+        const tx = st.addTx({ type: 'transfer', amount: t.amount, account: t.from, toAccount: t.to, toAmount: t.amount, note: 'Reparto del pago', date: todayISO() < p.start ? p.start : todayISO() });
+        t.done = true; t.txId = tx.id;
+        toast(phrase('paid'));
+      }
+      st.save();
+      draw();
+      nav.refresh();
+    }));
+  };
+  draw();
   nav.refresh();
 }

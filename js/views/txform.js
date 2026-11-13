@@ -21,17 +21,24 @@ export function txRow(t) {
   }
   const c = st.category(t.category);
   const inc = t.type === 'income';
-  return `<li><button class="li" data-tx="${t.id}"><div class="emoji">${c?.emoji || (inc ? '💰' : '💸')}</div><div class="grow"><div class="ellipsis">${esc(t.note || c?.name || 'Movimiento')}</div><div class="tiny muted">${esc(c?.name || '')} · ${esc(acc?.name || '')}${t.historic ? ' · antes de la app' : ''}</div></div><span class="amount ${inc ? 'in' : ''}">${fmt(inc ? t.amount : -t.amount, cur, { sign: inc })}</span></button></li>`;
+  const lbl = st.labelOf(t);
+  const sub = lbl && c && lbl !== c.name ? `${lbl} · ${c.name}` : c?.name || '';
+  return `<li><button class="li" data-tx="${t.id}"><div class="emoji">${st.emojiOf(t) || (inc ? '💰' : '💸')}</div><div class="grow"><div class="ellipsis">${esc(t.note || lbl || 'Movimiento')}</div><div class="tiny muted ellipsis">${esc(sub)} · ${esc(acc?.name || '')}${t.historic ? ' · antes de la app' : ''}</div></div><span class="amount ${inc ? 'in' : ''}">${fmt(inc ? t.amount : -t.amount, cur, { sign: inc })}</span></button></li>`;
 }
 
-function catGrid(type, selected) {
+function catGrid(type, selected, selItem) {
   const S = st.S();
-  if (type === 'income') {
-    return `<div class="chips" style="flex-wrap:wrap">${S.categories.filter((c) => c.block === 'ingreso').map((c) => `<button class="chip ${c.id === selected ? 'on' : ''}" data-cat="${c.id}">${c.emoji} ${esc(c.name)}</button>`).join('')}</div>`;
-  }
+  const chip = (c) => `<button class="chip ${c.id === selected ? 'on' : ''}" data-cat="${c.id}">${c.emoji} ${esc(c.name)}</button>`;
+  const items = () => {
+    const c = st.category(selected);
+    if (!c || (c.items || []).length < 2) return '';
+    return `<p class="tiny muted strong" style="margin:14px 4px 6px">DETALLE DE ${esc(c.name.toUpperCase())}</p>
+      <div class="chips" style="flex-wrap:wrap">${c.items.map((i) => `<button class="chip ${i.id === selItem ? 'on' : 'soft'}" data-item="${i.id}">${i.emoji} ${esc(i.name)}</button>`).join('')}</div>`;
+  };
+  if (type === 'income') return `<div class="chips mt12" style="flex-wrap:wrap">${S.categories.filter((c) => c.block === 'ingreso').map(chip).join('')}</div>`;
   return ['disp', 'gastos', 'comp'].map((b) => `
     <p class="tiny muted strong" style="margin:12px 4px 6px"><span class="dot" style="background:${BLOCKS[b].color}"></span> ${BLOCKS[b].name.toUpperCase()}</p>
-    <div class="chips" style="flex-wrap:wrap">${S.categories.filter((c) => c.block === b).map((c) => `<button class="chip ${c.id === selected ? 'on' : ''}" data-cat="${c.id}">${c.emoji} ${esc(c.name)}</button>`).join('')}</div>`).join('');
+    <div class="chips" style="flex-wrap:wrap">${S.categories.filter((c) => c.block === b).map(chip).join('')}</div>`).join('') + items();
 }
 
 export function openTxForm(existing = null, preset = {}) {
@@ -40,7 +47,8 @@ export function openTxForm(existing = null, preset = {}) {
   if (t.type === 'alloc') return openAllocView(existing);
   let type = t.type;
   let cat = t.category || null;
-  let catTouched = !!existing;
+  let item = t.item || null;
+  let catTouched = !!existing || !!preset.category;
 
   const accOpts = (sel, filter = () => true) => st.activeAccounts().filter(filter).map((a) => `<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${esc(a.name)} · ${a.currency}</option>`).join('');
   const cur = (id) => st.account(id)?.currency || 'COP';
@@ -78,7 +86,7 @@ export function openTxForm(existing = null, preset = {}) {
           <div class="field"><label>Fecha</label><input type="date" id="date" value="${t.date}"/></div>
         </div>`}
       ${type === 'transfer' ? `<div class="field mt8"><label>Fecha</label><input type="date" id="date" value="${t.date}"/></div>` : ''}
-      ${type !== 'transfer' ? `<div id="cats">${catGrid(type, cat)}</div>` : ''}
+      ${type !== 'transfer' ? `<div id="cats">${catGrid(type, cat, item)}</div>` : ''}
       ${type === 'expense' ? `
         <div class="field mt16"><label>¿Sale de un bolsillo?</label><select id="pocket"><option value="">No, de la plata libre</option>${S.pockets.filter((p) => !p.archived).map((p) => `<option value="${p.id}" ${p.id === t.pocket ? 'selected' : ''}>${p.emoji} ${esc(p.name)} (${st.account(p.account)?.name})</option>`).join('')}</select></div>
         <div class="field mt8"><label>¿Es un compromiso del checklist?</label><select id="rec"><option value="">No</option>${S.recurring.filter((r) => r.active).map((r) => `<option value="${r.id}" ${r.id === t.recurring ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></div>` : ''}
@@ -103,22 +111,39 @@ export function openTxForm(existing = null, preset = {}) {
     $$('[data-type]', s.el).forEach((b) => b.addEventListener('click', () => {
       collect();
       type = b.dataset.type;
-      if (type === 'income' && (!cat || st.category(cat)?.block !== 'ingreso')) cat = 'sueldo';
-      if (type === 'expense' && st.category(cat)?.block === 'ingreso') cat = null;
+      if (type === 'income' && (!cat || st.category(cat)?.block !== 'ingreso')) { cat = 'sueldo'; item = 'sueldo'; }
+      if (type === 'expense' && st.category(cat)?.block === 'ingreso') { cat = null; item = null; }
       draw();
     }));
-    $$('[data-cat]', s.el).forEach((b) => b.addEventListener('click', () => {
-      cat = b.dataset.cat;
-      catTouched = true;
-      $$('[data-cat]', s.el).forEach((x) => x.classList.toggle('on', x.dataset.cat === cat));
-      const c = st.category(cat);
-      if (!existing && c?.account && $('#acc', s.el)) $('#acc', s.el).value = c.account;
-    }));
+    const redrawCats = () => {
+      const box = $('#cats', s.el);
+      if (!box) return;
+      box.innerHTML = catGrid(type, cat, item);
+      wireCats();
+    };
+    const wireCats = () => {
+      $$('[data-cat]', s.el).forEach((b) => b.addEventListener('click', () => {
+        if (cat !== b.dataset.cat) item = null;
+        cat = b.dataset.cat;
+        const c = st.category(cat);
+        if ((c.items || []).length === 1) item = c.items[0].id;
+        catTouched = true;
+        redrawCats();
+      }));
+      $$('[data-item]', s.el).forEach((b) => b.addEventListener('click', () => {
+        item = item === b.dataset.item ? null : b.dataset.item;
+        catTouched = true;
+        const i = st.item(cat, item);
+        if (!existing && i?.account && $('#acc', s.el)) $('#acc', s.el).value = i.account;
+        redrawCats();
+      }));
+    };
+    wireCats();
     const note = $('#note', s.el);
     note?.addEventListener('input', () => {
       if (catTouched) return;
       const g = guessCategory(note.value, type);
-      if (g) { cat = g; $$('[data-cat]', s.el).forEach((x) => x.classList.toggle('on', x.dataset.cat === cat)); }
+      if (g && (g.category !== cat || g.item !== item)) { cat = g.category; item = g.item; redrawCats(); }
     });
     const acc = $('#acc', s.el), to = $('#to', s.el);
     const onAcc = () => {
@@ -139,7 +164,7 @@ export function openTxForm(existing = null, preset = {}) {
     $('#amt', s.el)?.addEventListener('input', updateRate);
     $('#rec', s.el)?.addEventListener('change', (e) => {
       const r = st.recurringItem(e.target.value);
-      if (r) { cat = r.category; $$('[data-cat]', s.el).forEach((x) => x.classList.toggle('on', x.dataset.cat === cat)); if (!$('#note', s.el).value) $('#note', s.el).value = r.name; }
+      if (r) { cat = r.category; item = r.item || null; redrawCats(); if (!$('#note', s.el).value) $('#note', s.el).value = r.name; }
     });
     $('#save', s.el).addEventListener('click', saveTx);
     $('#del', s.el)?.addEventListener('click', async () => {
@@ -176,6 +201,7 @@ export function openTxForm(existing = null, preset = {}) {
     } else {
       if (!cat) { toast('Escoge una categoría.'); return; }
       out.category = cat;
+      out.item = item;
       out.note = t.note;
       if (type === 'expense') {
         out.pocket = $('#pocket', s.el)?.value || null;

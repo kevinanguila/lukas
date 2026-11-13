@@ -1,5 +1,5 @@
 // Estado de la app, persistencia local y cálculos.
-import { seedState } from './seed.js';
+import { seedState, seedCategories, seedRecurring, V1_MAP, SEED_VERSION } from './seed.js';
 import { periodOf, todayISO, dueDateIn, daysBetween } from './dates.js';
 
 const KEY = 'lukas.v1';
@@ -25,6 +25,21 @@ function migrate(s) {
   const base = seedState();
   s.settings = { ...base.settings, ...s.settings };
   for (const k of Object.keys(base)) if (s[k] === undefined) s[k] = base[k];
+  // v1 → v2: categorías planas → grupos con detalle
+  if ((s.version || 1) < 2) {
+    for (const t of s.transactions) {
+      const m = V1_MAP[t.category];
+      if (m) { t.category = m[0]; t.item = m[1]; }
+    }
+    const oldRec = s.recurring || [];
+    s.recurring = seedRecurring().map((r) => {
+      const o = oldRec.find((x) => x.id === r.id);
+      return o ? { ...r, amount: o.amount, account: o.account, day: o.day, active: o.active, note: o.note ?? r.note } : r;
+    });
+    s.categories = seedCategories();
+    s.learned = {};
+    s.version = SEED_VERSION;
+  }
   return s;
 }
 
@@ -60,6 +75,12 @@ export const account = (id) => state.accounts.find((a) => a.id === id);
 export const category = (id) => state.categories.find((c) => c.id === id);
 export const pocket = (id) => state.pockets.find((p) => p.id === id);
 export const recurringItem = (id) => state.recurring.find((r) => r.id === id);
+export const item = (catId, itemId) => category(catId)?.items?.find((i) => i.id === itemId);
+// Todos los detalles con su grupo: [{ cat, item }]
+export const allItems = () => state.categories.flatMap((c) => (c.items || []).map((i) => ({ cat: c, item: i })));
+// Nombre para mostrar de un movimiento: "Gasolina" o el grupo si no tiene detalle
+export const labelOf = (t) => item(t.category, t.item)?.name || category(t.category)?.name || '';
+export const emojiOf = (t) => item(t.category, t.item)?.emoji || category(t.category)?.emoji || '';
 export const activeAccounts = () => state.accounts.filter((a) => !a.hidden).sort((a, b) => (a.order || 0) - (b.order || 0));
 
 // ---------- Movimientos ----------
@@ -83,10 +104,11 @@ export function deleteTx(id) {
   save();
 }
 
+const STOP = new Set(['para', 'pero', 'como', 'esta', 'este', 'esto', 'unos', 'unas', 'gaste', 'pague', 'compre', 'lucas', 'pesos', 'desde', 'hasta', 'otro', 'otra', 'cuenta', 'nequi', 'bancolombia']);
 function learnFrom(t) {
-  if (t.type !== 'expense' || !t.category || !t.note) return;
-  const words = t.note.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').split(/[^a-zñ0-9]+/).filter((w) => w.length > 3);
-  for (const w of words) state.learned[w] = t.category;
+  if (!['expense', 'income'].includes(t.type) || !t.category || !t.note || t.recurring) return;
+  const words = t.note.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').split(/[^a-z0-9]+/).filter((w) => w.length > 3 && !STOP.has(w));
+  for (const w of words) state.learned[w] = `${t.category}/${t.item || ''}`;
 }
 
 // ---------- Tasa ----------
@@ -146,8 +168,8 @@ export function blockOf(t) {
 export function spentByCategory(p) {
   const out = {};
   for (const t of txInPeriod(p)) {
-    if (t.type !== 'expense') continue;
-    out[t.category] = (out[t.category] || 0) + toCOP(t.amount, t.currencyOverride || account(t.account)?.currency);
+    if (t.type !== 'expense' || t.adjust) continue;
+    out[t.category] = (out[t.category] || 0) + toCOP(t.amount, account(t.account)?.currency);
   }
   return out;
 }
@@ -155,11 +177,41 @@ export function spentByCategory(p) {
 export function commitmentsTotal() {
   return state.recurring.filter((r) => r.active).reduce((s, r) => s + r.amount, 0);
 }
+// Compromisos cuyo grupo pertenece a un bloque (p. ej. los pateos viven en Transporte → Gastos)
+export function recurringInBlock(block) {
+  return state.recurring.filter((r) => r.active && (category(r.category)?.block || 'comp') === block).reduce((s, r) => s + r.amount, 0);
+}
 export function commitmentsFor(accId) {
   return state.recurring.filter((r) => r.active && r.account === accId).reduce((s, r) => s + r.amount, 0);
 }
 export function capsTotal() {
-  return state.categories.filter((c) => c.block === 'gastos' && c.cap).reduce((s, c) => s + c.cap, 0);
+  return allItems().filter(({ cat, item }) => cat.block === 'gastos' && item.cap).reduce((s, { item }) => s + item.cap, 0);
+}
+export function spentByItem(p) {
+  const out = {};
+  for (const t of txInPeriod(p)) {
+    if (t.type !== 'expense' || t.adjust) continue;
+    const k = `${t.category}/${t.item || ''}`;
+    out[k] = (out[k] || 0) + toCOP(t.amount, account(t.account)?.currency);
+  }
+  return out;
+}
+// Resumen por grupo con su detalle (para el presupuesto)
+export function groupSummary(p) {
+  const byItem = spentByItem(p);
+  const cl = checklist(p);
+  return state.categories.filter((c) => c.block !== 'ingreso').map((c) => {
+    const recs = cl.filter((r) => r.category === c.id);
+    const items = (c.items || []).map((i) => ({
+      ...i,
+      spent: byItem[`${c.id}/${i.id}`] || 0,
+      recs: recs.filter((r) => r.item === i.id),
+    }));
+    const loose = byItem[`${c.id}/`] || 0;
+    const spent = items.reduce((s, i) => s + i.spent, 0) + loose;
+    const budget = recs.reduce((s, r) => s + r.amount, 0) + items.reduce((s, i) => s + (i.cap || 0), 0);
+    return { ...c, items, recs, spent, budget, loose };
+  });
 }
 
 // Estado del checklist de compromisos en un periodo
@@ -193,19 +245,19 @@ export function checklist(p) {
 export function blockSummary(p) {
   const spent = { comp: 0, gastos: 0, disp: 0, ahorro: 0 };
   for (const t of txInPeriod(p)) {
-    if (t.type === 'expense') {
+    if (t.type === 'expense' && !t.adjust) {
       const b = blockOf(t);
       if (spent[b] !== undefined) spent[b] += toCOP(t.amount, account(t.account)?.currency);
     }
     // Ahorro y bolsillos: plata apartada (desde la plata libre) y dólares a ARQ
-    if (t.type === 'alloc' && t.pocket && !t.fromPocket) spent.ahorro += t.amount;
+    if (t.type === 'alloc' && t.pocket && !t.fromPocket && !t.initial) spent.ahorro += t.amount;
     if (t.type === 'income' && t.account === 'arq') spent.ahorro += t.amount * (t.rate || usdRate());
   }
   const plan = state.plans[p.key];
   const ahorroPlan = plan ? Object.values(plan.pockets || {}).reduce((s, v) => s + (v || 0), 0) + (plan.arqUSD || 0) * usdRate() : 0;
   return {
-    comp: { spent: spent.comp, budget: commitmentsTotal() },
-    gastos: { spent: spent.gastos, budget: capsTotal() },
+    comp: { spent: spent.comp, budget: recurringInBlock('comp') },
+    gastos: { spent: spent.gastos, budget: capsTotal() + recurringInBlock('gastos') },
     disp: { spent: spent.disp, budget: state.settings.disponible },
     ahorro: { spent: spent.ahorro, budget: ahorroPlan || spent.ahorro || 1 },
   };

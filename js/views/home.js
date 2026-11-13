@@ -71,7 +71,7 @@ export function render() {
     <div class="section-title" id="checklist"><h2>Compromisos.</h2><span class="small muted">${doneCount} de ${cl.length} listos</span></div>
     <article class="card tight">
       <ul class="list">
-        ${cl.map(checkRow).join('') || '<li class="empty">No hay compromisos activos.</li>'}
+        ${groupedChecklist(cl) || '<li class="empty">No hay compromisos activos.</li>'}
       </ul>
     </article>
     <p class="tiny muted" style="margin:8px 12px 0">Toca el círculo para marcarlo listo. Mantén presionado si pagaste un monto distinto.</p>
@@ -91,6 +91,22 @@ export function render() {
       <ul class="list">${recent.map(txRow).join('') || `<li class="empty"><div class="big">🗒️</div>Cuéntale a Lukas tu primer gasto.</li>`}</ul>
     </article>
   </section>`;
+}
+
+// Checklist agrupado por categoría (los grupos con algo urgente van primero)
+function groupedChecklist(cl) {
+  const order = [];
+  const by = {};
+  for (const c of cl) {
+    if (!by[c.category]) { by[c.category] = []; order.push(c.category); }
+    by[c.category].push(c);
+  }
+  return order.map((cid) => {
+    const g = st.category(cid);
+    const list = by[cid];
+    const done = list.filter((c) => c.done).length;
+    return `<li class="li no-icon" style="min-height:0;padding:12px 22px 2px"><span class="tiny muted strong">${g?.emoji || ''} ${esc((g?.name || 'Otros').toUpperCase())} · ${done} de ${list.length}</span></li>${list.map(checkRow).join('')}`;
+  }).join('');
 }
 
 function checkRow(c) {
