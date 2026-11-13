@@ -8,6 +8,7 @@ import { parse } from '../parser.js';
 import * as L from '../lukas.js';
 import { openTxForm } from './txform.js';
 import { openGiro } from './payday.js';
+import * as B from '../brain.js';
 
 const MAX = 200;
 
@@ -135,7 +136,7 @@ function respond(text) {
     case 'top': push('lk', L.topText()); break;
     case 'spent_on': push('lk', L.spentOnText(r.category, r.item)); break;
     case 'balance': push('lk', L.balanceText(r.account)); break;
-    case 'help': push('lk', L.helpText()); break;
+    case 'help': push('lk', B.answer('help')); break;
     case 'thanks': push('lk', pick(['De nada, mi llave. Aquí estoy.', 'Pa\' eso estamos, rey.', 'Eso va. Cualquier cosa me cuentas.'])); break;
     case 'greet': push('lk', `${L.greeting()} ¿Qué gastaste hoy o en qué te ayudo?`); break;
     case 'giro': openGiro(); push('lk', 'Ahí te abrí el reparto del mes.'); break;
@@ -154,8 +155,13 @@ function respond(text) {
       break;
     }
     case 'tx': proposeTx(r.tx, r.currency); break;
-    default:
-      push('lk', `${pick(['Ombe, esa no la cogí.', 'Ajá, ¿y entonces? No te entendí.', 'Eche, me perdí.'])} Prueba algo como «almuerzo 20 lucas», «pagué el gas» o «¿cuánto me queda?».`, { chips: ['Ayuda', '¿Cuánto me queda?', 'Tírala, ¿qué hago?'] });
+    default: {
+      const ans = B.answer(r.intent);
+      if (ans) { push('lk', ans); break; }
+      const sug = (r.alts || []).map((i) => B.SUGGEST_LABEL[i]).filter(Boolean);
+      const chips = [...new Set([...sug, '¿En qué me ayudas?', '¿Cómo voy?', 'Tírala, ¿qué hago?'])].slice(0, 4);
+      push('lk', `${pick(['Ombe, esa no la cogí bien.', 'Ajá, ¿y entonces? No te entendí.', 'Eche, me perdí.'])} ${sug.length ? '¿Quisiste decir alguna de estas?' : 'Dímelo de otra forma o toca una de estas:'}`, { chips });
+    }
   }
   st.save();
 }

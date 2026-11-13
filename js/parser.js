@@ -7,6 +7,7 @@
 import { S } from './store.js';
 import { parseNumber } from './money.js';
 import { todayISO, addDays, iso, today } from './dates.js';
+import { classify } from './brain.js';
 
 // Quita tildes pero conserva la ñ (para no confundir "uñas" con "unas")
 export const norm = (s) => String(s || '').toLowerCase().replace(/ñ/g, '\u0001').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\u0001/g, 'ñ').replace(/[¿¡]/g, '');
@@ -60,7 +61,8 @@ function findAccounts(text) {
 // "25 lucas", "25 mil", "25k", "25.000", "1,5 millones", "un palo", "medio palo", "1630 usd", "$25.000", "20" (→ 20 mil)
 const UNIT = '(millon(?:es)?|palos?|k|mil|lucas?|lukas?|barras?|m\\b|usd|dolares|dolar|us)';
 export function findAmounts(text) {
-  const t = norm(text);
+  // "4x1000" es el impuesto, no un monto
+  const t = norm(text).replace(/\b4\s*x\s*1\.?000\b|\b4\s*por\s*mil\b/g, ' gmf ');
   const re = new RegExp(`(\\$|us\\$)?\\s*(\\d+(?:[.,]\\d+)*)\\s*${UNIT}?`, 'g');
   const out = [];
   let m;
@@ -186,7 +188,7 @@ export function parse(text, ctx = {}) {
 
   // Charla
   if (/^(gracias|grax|mil gracias|muchas gracias|bacano|chevere|listo|ok|okey|dale|va|eso|perfecto|nitido)\b[\s!.]*$/.test(t)) return { intent: 'thanks' };
-  if (/^(hola|habla|ey|epa|aja|que hubo|quiubo|buenas|buenos dias|buenas tardes|buenas noches|que mas|q mas|como estas|como vas|que hay|que es la que hay)\b/.test(t) && !hasAmt) return { intent: 'greet' };
+  if (/^(hola|habla|ey|epa|aja|que hubo|quiubo|buenas|buenos dias|buenas tardes|buenas noches|que mas|q mas|que hay|que es la que hay)\b/.test(t) && !hasAmt) return { intent: 'greet' };
   if (/\b(ayuda|como funciona|que puedo decir|que sabes hacer|como te hablo|comandos)\b/.test(t)) return { intent: 'help' };
   if (/\b(borra|borrar|deshace|deshacer|elimina|quita)\b.*\b(ultimo|ultima|eso|anterior)\b|^(deshacer|borralo|borra eso)$/.test(t)) return { intent: 'undo' };
 
@@ -204,6 +206,10 @@ export function parse(text, ctx = {}) {
   if (/\b(pendiente|pendientes|que me falta|que debo|que tengo que pagar|que falta por pagar|checklist|que se vence|vencimientos)\b/.test(t)) return { intent: 'pending' };
   if (/\b(mudanza|meta|metas|ahorro)\b/.test(t) && !hasAmt && /\b(como va|cuanto|voy|llevo|falta)\b/.test(t)) return { intent: 'goal' };
   if (/\b(giro|reparto|transferencias)\b/.test(t) && !hasAmt) return { intent: 'giro' };
+
+  // Preguntas "como persona" (sin montos): se comparan con muchas formas de decir lo mismo
+  const brain = !hasAmt ? classify(text) : null;
+  if (brain && brain.score >= 0.72) return { intent: brain.intent, via: 'brain' };
 
   // Varios gastos en un mensaje: "almuerzo 20 y taxi 12, gasolina 80 mil"
   if (amounts.length > 1 && !RX.transfer.test(t) && !RX.income.test(t)) {
@@ -247,7 +253,9 @@ export function parse(text, ctx = {}) {
     const a = findAmount(text);
     return { intent: 'ask', need: 'category', draft: { type: 'expense', amount: a.amount, account: accs[0] || 'nequi', date, note: cleanNote(text, a.raw) } };
   }
-  return { intent: 'unknown' };
+  // Coincidencia más floja: si se parece bastante a algo conocido, lo tomamos
+  if (brain && brain.score >= 0.5) return { intent: brain.intent, via: 'brain' };
+  return { intent: 'unknown', alts: brain?.alts || [] };
 }
 
 function defaultAccount(g) {
